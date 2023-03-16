@@ -20,19 +20,12 @@ def get_model(wells: List[str], avoid_infeasible=True):
     Q = {m: set() for m in M}
 
     # Prepara estruturas de dados para armazenamento dos valores das curvas de produção e RGL de poço
-    C = {n: set() for n in N}          # CKP
-    GL = {n: set() for n in N}         # Gás Lift
+    C = dict()          # CKP
+    GL = dict()         # Gás Lift
 
     # Percorre as curvas de produção e preenche as estruturas criadas para armazenamento de cada grandeza
     for n in N:
-        for (ckp, gl), ql in Q_LIQ_N_FUN[n].items():
-            C[n].add(ckp)
-            GL[n].add(gl)
-            # Set_Qliq_n[n].add(ql)
-        # Converte estruturas em listas ordenadas
-        C[n] = sorted(list(C[n]))
-        GL[n] = sorted(list(GL[n]))
-        # Set_Qliq_n[n] = sorted(list(Set_Qliq_n[n]))
+        C[n], GL[n] = get_C_GL(n)
 
     # Prepara os conjuntos com breakpoints de Qliq e LGR
     Set_Qliq_n = {n: [] for n in N}      # Conjunto de breakpoints de Qliq
@@ -197,3 +190,20 @@ def fix_c_gl(model, cs, gls):
     model_.update()
 
     return model_
+
+def get_C_GL(well):
+    # Prepara estruturas de dados para armazenamento dos valores das curvas de produção e RGL de poço
+    C = set()          # CKP
+    GL = set()         # Gás Lift
+
+    # Percorre as curvas de produção e preenche as estruturas criadas para armazenamento de cada grandeza
+    for (ckp, gl), ql in Q_LIQ_N_FUN[well].items():
+        C.add(ckp)
+        GL.add(gl)
+        # Set_Qliq_n[n].add(ql)
+    # Converte estruturas em listas ordenadas
+    C = sorted(list(C))
+    GL = sorted(list(GL))
+    # Set_Qliq_n[n] = sorted(list(Set_Qliq_n[n]))
+
+    return C, GL

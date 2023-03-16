@@ -1,24 +1,17 @@
 import pickle
 
-from src.model import fix_c_gl, get_model
+from src.model import fix_c_gl, get_model, get_C_GL
 from src.wells import Q_LIQ_N_FUN, WELLS
 
 
 if __name__ == '__main__':
     # Prepara estruturas de dados para armazenamento dos valores das curvas de produção e RGL de poço
-    C = {n: set() for n in WELLS}          # CKP
-    GL = {n: set() for n in WELLS}         # Gás Lift
+    C = dict()          # CKP
+    GL = dict()         # Gás Lift
 
     # Percorre as curvas de produção e preenche as estruturas criadas para armazenamento de cada grandeza
     for n in WELLS:
-        for (ckp, gl), ql in Q_LIQ_N_FUN[n].items():
-            C[n].add(ckp)
-            GL[n].add(gl)
-            # Set_Qliq_n[n].add(ql)
-        # Converte estruturas em listas ordenadas
-        C[n] = sorted(list(C[n]))
-        GL[n] = sorted(list(GL[n]))
-        # Set_Qliq_n[n] = sorted(list(Set_Qliq_n[n]))
+        C[n], GL[n] = get_C_GL(n)
 
     ef_objs = dict()
 
