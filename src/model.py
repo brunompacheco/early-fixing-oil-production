@@ -1,5 +1,6 @@
 from typing import List
 
+import numpy as np
 import gurobipy as gp
 from gurobipy import GRB
 
@@ -207,3 +208,24 @@ def get_C_GL(well):
     # Set_Qliq_n[n] = sorted(list(Set_Qliq_n[n]))
 
     return C, GL
+
+def encode_fixing(c_pair, gl_pair, well):
+    C, GL = get_C_GL(well)
+
+    c_mbd = np.zeros(len(C) - 1)
+
+    for i in range(len(c_mbd)):
+        if c_pair[0] == C[i]:
+            assert c_pair[1] == C[i+1]
+
+            c_mbd[i] = 1
+
+    gl_mbd = np.zeros(len(GL) - 1)
+
+    for i in range(len(gl_mbd)):
+        if gl_pair[0] == GL[i]:
+            assert gl_pair[1] == GL[i+1]
+
+            gl_mbd[i] = 1
+    
+    return c_mbd, gl_mbd
