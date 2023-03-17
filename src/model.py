@@ -122,7 +122,7 @@ def get_model(wells: List[str], avoid_infeasible=True):
                         # Proibição de uso de pontos espúrios da curva de produção
                         model.addConstr(lmbd_n_c_gl[n, ckp, gl] <= 0)
                     else:
-                        model.addConstr(lmbd_n_c_gl[n, ckp, gl] <= 1e9)
+                        model.addConstr(lmbd_n_c_gl[n, ckp, gl] <= 1e6)
         for ckp in C[n]:
             # Acoplamento lambda eta
             model.addConstr(eta_n_c[n, ckp] == gp.quicksum(lmbd_n_c_gl[n, ckp, gl] for gl in GL[n]))  # 21g

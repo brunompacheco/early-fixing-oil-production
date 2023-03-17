@@ -18,6 +18,6 @@ class ObjSurrogate(nn.Module):
         self.net = nn.Sequential(*hidden_layers[:-1])  # ignore last activation
 
     def forward(self, A, b, z_c, z_gl):
-        x = torch.hstack([A.flatten(1), b, z_c, z_gl])
+        x = torch.hstack([A.flatten(1), b / 1e6, z_c, z_gl])
 
         return self.net(x)
