@@ -1,4 +1,5 @@
 import logging
+import pickle
 import random
 from abc import ABC, abstractmethod
 from contextlib import nullcontext
@@ -10,7 +11,10 @@ import torch
 import torch.nn as nn
 import wandb
 from torch.cuda.amp import GradScaler, autocast
+from torch.utils.data import DataLoader
 
+from src.dataset import EarlyFixingDataset
+from src.net import ObjSurrogate
 from src.utils import timeit
 
 
@@ -445,3 +449,121 @@ class Trainer(ABC):
         wandb.save(fname)
 
         return fpath
+
+class ObjectiveSurrogateTrainer(Trainer):
+    def __init__(self, net: ObjSurrogate, ef_objs_fpath, epochs=5, lr=0.1, batch_size=2**4, optimizer: str = 'Adam', optimizer_params: dict = None, loss_func: str = 'MSELoss', lr_scheduler: str = None, lr_scheduler_params: dict = None, mixed_precision=True, device=None, wandb_project=None, wandb_group=None, logger=None, checkpoint_every=50, random_seed=42, max_loss=None) -> None:
+        self.ef_objs_fpath = Path(ef_objs_fpath)
+        self.batch_size = int(batch_size)
+
+        self._add_to_wandb_config({
+            'batch_size': self.batch_size,
+        })
+
+        super().__init__(net, epochs, lr, optimizer, optimizer_params, loss_func, lr_scheduler, lr_scheduler_params, mixed_precision, device, wandb_project, wandb_group, logger, checkpoint_every, random_seed, max_loss)
+
+    def prepare_data(self):
+        with open(self.ef_objs_fpath, 'rb') as f:
+            ef_objs = pickle.load(f)
+
+        ef_objs_train = ef_objs.copy()
+        ef_objs_train.pop('JUB-58', None)
+
+        ds_train = EarlyFixingDataset(ef_objs_train)
+
+        ef_objs_test = ef_objs.copy()
+        ef_objs_test.pop('JUB-48', None)
+        ef_objs_test.pop('JUB-55', None)
+
+        ds_test = EarlyFixingDataset(ef_objs_test)
+
+        self.data = DataLoader(ds_train, 2**4, shuffle=True)
+        self.val_data = DataLoader(ds_test, 2**4)
+
+    def train_pass(self):
+        train_loss = 0
+        train_size = 0
+
+        forward_time = 0
+        loss_time = 0
+        backward_time = 0
+
+        self.net.train()
+        with torch.set_grad_enabled(True):
+            for (A, b, z_c, z_gl), y in self.data:
+                A = A.to(self.device)
+                b = b.to(self.device)
+                z_c = z_c.to(self.device)
+                z_gl = z_gl.to(self.device)
+
+                y = y.to(self.device).double()
+
+                self._optim.zero_grad()
+
+                with self.autocast_if_mp():
+                    forward_time_, y_hat = timeit(self.net)(A, b, z_c, z_gl)
+                    forward_time += forward_time_
+
+                    loss_time_, loss = self.get_loss_and_metrics(y_hat, y)
+                    loss_time += loss_time_
+
+                if self.mixed_precision:
+                    backward_time_, _  = timeit(self._scaler.scale(loss).backward)()
+                    self._scaler.step(self._optim)
+                    self._scaler.update()
+                else:
+                    backward_time_, _  = timeit(loss.backward)()
+                    self._optim.step()
+                backward_time += backward_time_
+
+                train_loss += loss.item() * len(y)
+                train_size += len(y)
+
+            if self.lr_scheduler is not None:
+                self._scheduler.step()
+
+        losses = self.aggregate_loss_and_metrics(train_loss, train_size)
+        times = {
+            'forward': forward_time,
+            'loss': loss_time,
+            'backward': backward_time,
+        }
+
+        return losses, times
+
+    def validation_pass(self):
+        val_loss = 0
+        val_size = 0
+        val_metrics = list()
+
+        forward_time = 0
+        loss_time = 0
+
+        self.net.eval()
+        with torch.set_grad_enabled(False):
+            for (A, b, z_c, z_gl), y in self.val_data:
+                A = A.to(self.device)
+                b = b.to(self.device)
+                z_c = z_c.to(self.device)
+                z_gl = z_gl.to(self.device)
+
+                y = y.to(self.device).double()
+
+                with self.autocast_if_mp():
+                    forward_time_, y_hat = timeit(self.net)(A, b, z_c, z_gl)
+                    forward_time += forward_time_
+
+                    loss_time_, loss, metrics = self.get_loss_and_metrics(y_hat, y, validation=True)
+                    loss_time += loss_time_
+
+                    val_metrics.append(metrics)
+
+                val_loss += loss.item() * len(y)  # scales to data size
+                val_size += len(y)
+
+        losses = self.aggregate_loss_and_metrics(val_loss, val_size, val_metrics)
+        times = {
+            'forward': forward_time,
+            'loss': loss_time,
+        }
+
+        return losses, times
