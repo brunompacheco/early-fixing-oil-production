@@ -1,41 +1,45 @@
 import pickle
+from pathlib import Path
+from tqdm import tqdm
 
 from src.model import fix_c_gl, get_model, get_C_GL
-from src.wells import Q_LIQ_N_FUN, WELLS
 
 
 if __name__ == '__main__':
-    # Prepara estruturas de dados para armazenamento dos valores das curvas de produção e RGL de poço
-    C = dict()          # CKP
-    GL = dict()         # Gás Lift
+    wells_fps = Path('data/raw').glob('*.pkl')
 
-    # Percorre as curvas de produção e preenche as estruturas criadas para armazenamento de cada grandeza
-    for n in WELLS:
-        C[n], GL[n] = get_C_GL(n)
+    # Prepara estruturas de dados para armazenamento dos valores das curvas de produção e RGL de poço
+    C, GL = get_C_GL(None)
 
     ef_objs = dict()
 
-    for n in WELLS:
-        print(n)
+    for well_fp in tqdm(list(wells_fps)):
+        with open(well_fp, 'rb') as f:
+            well = pickle.load(f)
 
-        model = get_model([n,])
+        well_name = well_fp.name.removesuffix('.pkl')
 
-        ef_objs[n] = dict()
+        try:
+            model = get_model([well,])
+        except ZeroDivisionError:
+            print('Zero division errror in ', well_name)
 
-        for i in range(len(C[n]) - 1):
-            cs = [C[n][i], C[n][i+1]]
-            for j in range(len(GL[n]) - 1):
-                gls = [GL[n][j], GL[n][j+1]]
+        ef_objs[well_name] = dict()
 
-                fixed_model = fix_c_gl(model, cs, gls)
+        for i in range(len(C) - 1):
+            for j in range(len(GL) - 1):
+                cs_to_fix = [C[i], C[i+1]]
+                gls_to_fix = [GL[j], GL[j+1]]
+
+                fixed_model = fix_c_gl(model, cs_to_fix, gls_to_fix)
                 fixed_model.setParam("TimeLimit", 300)
                 fixed_model.update()
                 fixed_model.optimize()
 
                 if fixed_model.status != 2:
-                    ef_objs[n][tuple(cs+gls)] = -1
+                    ef_objs[well_name][tuple(cs_to_fix+gls_to_fix)] = -1
                 else:
-                    ef_objs[n][tuple(cs+gls)] = fixed_model.ObjVal
+                    ef_objs[well_name][tuple(cs_to_fix+gls_to_fix)] = fixed_model.ObjVal
 
     with open('ef_objs.pkl', 'wb') as f:
         pickle.dump(ef_objs, f)

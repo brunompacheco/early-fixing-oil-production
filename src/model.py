@@ -4,12 +4,18 @@ import numpy as np
 import gurobipy as gp
 from gurobipy import GRB
 
-from src.wells import *
 
-
-def get_model(wells: List[str], avoid_infeasible=True):
-    N = wells
+def get_model(wells: List[dict], avoid_infeasible=True, verbose=False):
+    N = list(range(len(wells)))
     M = [0,]  # manifolds
+
+    q_liq_max = 100000.0
+    q_gas_max = 300000.0
+    q_gl_max = 300000.0
+
+    Q_LIQ_N_FUN = [well['curve'] for well in wells]
+    bsw_n = [well['bsw'] for well in wells]
+    gor_n = [well['gor'] for well in wells]
 
     ###############################################################################
     ### MANIPULAÇÕES DOS DADOS DE ENTRADA
@@ -21,22 +27,24 @@ def get_model(wells: List[str], avoid_infeasible=True):
     Q = {m: set() for m in M}
 
     # Prepara estruturas de dados para armazenamento dos valores das curvas de produção e RGL de poço
-    C = dict()          # CKP
-    GL = dict()         # Gás Lift
+    C = [np.linspace(10, 80, 6),] * len(wells)      # CKP
+    GL = [np.linspace(0, 300000, 6),] * len(wells)  # Gás Lift
 
-    # Percorre as curvas de produção e preenche as estruturas criadas para armazenamento de cada grandeza
-    for n in N:
-        C[n], GL[n] = get_C_GL(n)
+    # # Percorre as curvas de produção e preenche as estruturas criadas para armazenamento de cada grandeza
+    # for n in N:
+    #     well = wells[n]
+    #     C.append(sorted({k[0] for k in well['curve'].keys()}))
+    #     GL.append(sorted({k[1] for k in well['curve'].keys()}))
 
     # Prepara os conjuntos com breakpoints de Qliq e LGR
-    Set_Qliq_n = {n: [] for n in N}      # Conjunto de breakpoints de Qliq
-    Set_LGR_n = {n: [] for n in N}       # Conjunto de breakpoints de LGR      #[10 * k for k in range(51)]
+    Set_Qliq_n = [list(),] * len(wells)      # Conjunto de breakpoints de Qliq
+    Set_LGR_n = [list(),] * len(wells)       # Conjunto de breakpoints de LGR      #[10 * k for k in range(51)]
     for n in N:
         min_lgr, max_lgr, max_ql = 10000, 0, 0
+
         for (ckp, gl), ql in Q_LIQ_N_FUN[n].items():
             gas_prod = ql * (1 - bsw_n[n]) * gor_n[n]
-            gas_tot = gl + gas_prod
-            lgr = gas_tot / ql
+            lgr = (gl + ql * (1 - bsw_n[n]) * gor_n[n]) / ql
 
             min_lgr = min(min_lgr, lgr)
             max_lgr = max(max_lgr, lgr)
@@ -68,6 +76,8 @@ def get_model(wells: List[str], avoid_infeasible=True):
 
     # Create a new model
     model = gp.Model("flow_splitting")
+    if not verbose:
+        model.setParam("LogToConsole", 0)
 
     # Create variables
     ckp_n = model.addVars(N, vtype=GRB.CONTINUOUS, name="ckp_n")
@@ -142,7 +152,6 @@ def get_model(wells: List[str], avoid_infeasible=True):
         model.addConstr(q_water_n[n] == q_liq_n[n] * bsw_n[n])  # 22b
         model.addConstr(q_gas_n[n] == q_liq_n[n] * (1 - bsw_n[n]) * gor_n[n])  # 22c
 
-
     for n in N:
         for m in M:
             model.addConstr(q_liq_m[m] <= q_liq_max)  # #todo: adicionar no modelo
@@ -193,21 +202,26 @@ def fix_c_gl(model, cs, gls):
     return model_
 
 def get_C_GL(well):
-    # Prepara estruturas de dados para armazenamento dos valores das curvas de produção e RGL de poço
-    C = set()          # CKP
-    GL = set()         # Gás Lift
-
-    # Percorre as curvas de produção e preenche as estruturas criadas para armazenamento de cada grandeza
-    for (ckp, gl), ql in Q_LIQ_N_FUN[well].items():
-        C.add(ckp)
-        GL.add(gl)
-        # Set_Qliq_n[n].add(ql)
-    # Converte estruturas em listas ordenadas
-    C = sorted(list(C))
-    GL = sorted(list(GL))
-    # Set_Qliq_n[n] = sorted(list(Set_Qliq_n[n]))
+    C = np.linspace(10, 80, 6)
+    GL = np.linspace(0, 300000, 6)
 
     return C, GL
+
+    # # Prepara estruturas de dados para armazenamento dos valores das curvas de produção e RGL de poço
+    # C = set()          # CKP
+    # GL = set()         # Gás Lift
+
+    # # Percorre as curvas de produção e preenche as estruturas criadas para armazenamento de cada grandeza
+    # for (ckp, gl), ql in Q_LIQ_N_FUN[well].items():
+    #     C.add(ckp)
+    #     GL.add(gl)
+    #     # Set_Qliq_n[n].add(ql)
+    # # Converte estruturas em listas ordenadas
+    # C = sorted(list(C))
+    # GL = sorted(list(GL))
+    # # Set_Qliq_n[n] = sorted(list(Set_Qliq_n[n]))
+
+    # return C, GL
 
 def encode_fixing(c_pair, gl_pair, well):
     C, GL = get_C_GL(well)
@@ -229,3 +243,17 @@ def encode_fixing(c_pair, gl_pair, well):
             gl_mbd[i] = 1
     
     return c_mbd, gl_mbd
+
+def decode_fixing(c_mbd, gl_mbd, well):
+    C, GL = get_C_GL(well)
+
+    c_ = np.pad(c_mbd, (0,1))
+    c_ += np.roll(c_, 1)
+
+    gl_ = np.pad(gl_mbd, (0,1))
+    gl_ += np.roll(gl_, 1)
+
+    c_pair = C[c_ > 0]
+    gl_pair = GL[gl_ > 0]
+
+    return tuple(c_pair), tuple(gl_pair)

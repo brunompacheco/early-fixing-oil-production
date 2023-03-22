@@ -11,10 +11,12 @@ import torch
 import torch.nn as nn
 import wandb
 from torch.cuda.amp import GradScaler, autocast
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, SubsetRandomSampler
+from dgl.dataloading import GraphDataLoader
 
-from src.dataset import EarlyFixingDataset
-from src.net import ObjSurrogate
+from src.dataset import EarlyFixingDataset, WellObjDataset, EarlyFixingGraphDataset
+from src.model import decode_fixing
+from src.net import ObjSurrogate, InstanceGCN, Fixer
 from src.utils import timeit
 
 
@@ -158,7 +160,8 @@ class Trainer(ABC):
             self._scheduler = Scheduler(self._optim, **self.lr_scheduler_params)
             self._scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
 
-        self._loss_func = eval(f"nn.{self.loss_func}()")
+        self._loss_func = eval(f"nn.{self.loss_func}(pos_weight=0.2)")
+        # self._loss_func = eval(f"nn.{self.loss_func}()")
 
         if self.mixed_precision:
             self._scaler = GradScaler()
@@ -230,7 +233,7 @@ class Trainer(ABC):
             config=self._wandb_config,
         )
 
-        wandb.watch(self.net)
+        wandb.watch(self.net, log=None)
 
         self._id = wandb.run.id
 
@@ -465,19 +468,34 @@ class ObjectiveSurrogateTrainer(Trainer):
         with open(self.ef_objs_fpath, 'rb') as f:
             ef_objs = pickle.load(f)
 
+        # ds = WellObjDataset(ef_objs)
+
+        # indices = np.arange(len(ds))
+        # np.random.shuffle(indices)
+
+        # train_i = int(0.8 * len(ds))
+        # train_sampler = SubsetRandomSampler(indices[:train_i])
+        # test_sampler = SubsetRandomSampler(indices[train_i:])
+
+        # self.data = DataLoader(ds, 2**6, sampler=train_sampler)
+        # self.val_data = DataLoader(ds, 2**6, sampler=test_sampler)
+
+        wells = list(ef_objs.keys())
+
+        np.random.seed(42)
+        test_is = np.random.choice(len(wells), int(0.2 * len(wells)), replace=False)
+        test_wells = [wells[i] for i in test_is]
+        ef_objs_test = {w: ef_objs[w] for w in test_wells}
+
         ef_objs_train = ef_objs.copy()
-        ef_objs_train.pop('JUB-58', None)
+        for w in test_wells:
+            ef_objs_train.pop(w, None)
 
-        ds_train = EarlyFixingDataset(ef_objs_train)
+        ds_train = WellObjDataset(ef_objs_train)
+        ds_test = WellObjDataset(ef_objs_test)
 
-        ef_objs_test = ef_objs.copy()
-        ef_objs_test.pop('JUB-48', None)
-        ef_objs_test.pop('JUB-55', None)
-
-        ds_test = EarlyFixingDataset(ef_objs_test)
-
-        self.data = DataLoader(ds_train, 2**4, shuffle=True)
-        self.val_data = DataLoader(ds_test, 2**4)
+        self.data = DataLoader(ds_train, 2**6, shuffle=True)
+        self.val_data = DataLoader(ds_test, 2**6)
 
     def train_pass(self):
         train_loss = 0
@@ -489,9 +507,10 @@ class ObjectiveSurrogateTrainer(Trainer):
 
         self.net.train()
         with torch.set_grad_enabled(True):
-            for (A, b, z_c, z_gl), y in self.data:
-                A = A.to(self.device)
-                b = b.to(self.device)
+            for (q_liq_fun, bsw, gor, z_c, z_gl), y in self.data:
+                q_liq_fun = q_liq_fun.to(self.device)
+                bsw = bsw.to(self.device)
+                gor = gor.to(self.device)
                 z_c = z_c.to(self.device)
                 z_gl = z_gl.to(self.device)
 
@@ -500,10 +519,10 @@ class ObjectiveSurrogateTrainer(Trainer):
                 self._optim.zero_grad()
 
                 with self.autocast_if_mp():
-                    forward_time_, y_hat = timeit(self.net)(A, b, z_c, z_gl)
+                    forward_time_, y_hat = timeit(self.net)(q_liq_fun, bsw, gor, z_c, z_gl)
                     forward_time += forward_time_
 
-                    loss_time_, loss = self.get_loss_and_metrics(y_hat, y)
+                    loss_time_, loss = self.get_loss_and_metrics(y_hat, y.unsqueeze(-1))
                     loss_time += loss_time_
 
                 if self.mixed_precision:
@@ -540,19 +559,20 @@ class ObjectiveSurrogateTrainer(Trainer):
 
         self.net.eval()
         with torch.set_grad_enabled(False):
-            for (A, b, z_c, z_gl), y in self.val_data:
-                A = A.to(self.device)
-                b = b.to(self.device)
+            for (q_liq_fun, bsw, gor, z_c, z_gl), y in self.val_data:
+                q_liq_fun = q_liq_fun.to(self.device)
+                bsw = bsw.to(self.device)
+                gor = gor.to(self.device)
                 z_c = z_c.to(self.device)
                 z_gl = z_gl.to(self.device)
 
                 y = y.to(self.device).double()
 
                 with self.autocast_if_mp():
-                    forward_time_, y_hat = timeit(self.net)(A, b, z_c, z_gl)
+                    forward_time_, y_hat = timeit(self.net)(q_liq_fun, bsw, gor, z_c, z_gl)
                     forward_time += forward_time_
 
-                    loss_time_, loss, metrics = self.get_loss_and_metrics(y_hat, y, validation=True)
+                    loss_time_, loss, metrics = self.get_loss_and_metrics(y_hat, y.unsqueeze(-1), validation=True)
                     loss_time += loss_time_
 
                     val_metrics.append(metrics)
@@ -567,3 +587,399 @@ class ObjectiveSurrogateTrainer(Trainer):
         }
 
         return losses, times
+
+class EarlyFixingTrainer(Trainer):
+    def __init__(self, net: Fixer, surrogate: ObjSurrogate, ef_objs_fpath, epochs=5, lr=0.1, batch_size=2**4, optimizer: str = 'Adam', optimizer_params: dict = None, loss_func: str = 'MSELoss', lr_scheduler: str = None, lr_scheduler_params: dict = None, mixed_precision=True, device=None, wandb_project=None, wandb_group=None, logger=None, checkpoint_every=50, random_seed=42, max_loss=None) -> None:
+        self.ef_objs_fpath = Path(ef_objs_fpath)
+        self.batch_size = int(batch_size)
+
+        self.surrogate = surrogate
+        self.surrogate.eval()
+
+        self._add_to_wandb_config({
+            'batch_size': self.batch_size,
+        })
+
+        super().__init__(net, epochs, lr, optimizer, optimizer_params, loss_func, lr_scheduler, lr_scheduler_params, mixed_precision, device, wandb_project, wandb_group, logger, checkpoint_every, random_seed, max_loss)
+
+        # self.net.to(self.device)
+        self.surrogate.to(self.device)
+
+    def prepare_data(self):
+        with open(self.ef_objs_fpath, 'rb') as f:
+            ef_objs = pickle.load(f)
+
+        self.ef_objs = ef_objs
+
+        # ds = WellObjDataset(ef_objs)
+
+        # indices = np.arange(len(ds))
+        # np.random.shuffle(indices)
+
+        # train_i = int(0.8 * len(ds))
+        # train_sampler = SubsetRandomSampler(indices[:train_i])
+        # test_sampler = SubsetRandomSampler(indices[train_i:])
+
+        # self.data = DataLoader(ds, 2**6, sampler=train_sampler)
+        # self.val_data = DataLoader(ds, 2**6, sampler=test_sampler)
+
+        wells = list(ef_objs.keys())
+
+        np.random.seed(42)
+        test_is = np.random.choice(len(wells), int(0.2 * len(wells)), replace=False)
+        test_wells = [wells[i] for i in test_is]
+        ef_objs_test = {w: ef_objs[w] for w in test_wells}
+
+        ef_objs_train = ef_objs.copy()
+        for w in test_wells:
+            ef_objs_train.pop(w, None)
+
+        ds_train = EarlyFixingDataset(ef_objs_train)
+        ds_test = EarlyFixingDataset(ef_objs_test)
+
+        self.test_wells = ds_test.wells
+
+        self.data = DataLoader(ds_train, 2**6, shuffle=True)
+        self.val_data = DataLoader(ds_test, 2**6)
+
+    def train_pass(self):
+        train_loss = 0
+        train_size = 0
+
+        forward_time = 0
+        loss_time = 0
+        backward_time = 0
+
+        self.net.train()
+        with torch.set_grad_enabled(True):
+            for (q_liq_fun, bsw, gor), (z_c, z_gl, obj) in self.data:
+                q_liq_fun = q_liq_fun.to(self.device)
+                bsw = bsw.to(self.device)
+                gor = gor.to(self.device)
+
+                z_c = z_c.to(self.device)
+                z_gl = z_gl.to(self.device)
+                obj = obj.to(self.device)
+
+                with self.autocast_if_mp():
+                    forward_time_, y_hat = timeit(self.net)(q_liq_fun, bsw, gor)
+                    forward_time += forward_time_
+
+                    loss_time_, loss = self.get_loss_and_metrics(y_hat, (q_liq_fun, bsw, gor, z_c, z_gl, obj))
+                    loss_time += loss_time_
+
+                if self.mixed_precision:
+                    backward_time_, _  = timeit(self._scaler.scale(loss).backward)()
+                    self._scaler.step(self._optim)
+                    self._scaler.update()
+                else:
+                    backward_time_, _  = timeit(loss.backward)()
+                    self._optim.step()
+                backward_time += backward_time_
+
+                train_loss += loss.item() * len(obj)
+                train_size += len(obj)
+
+            if self.lr_scheduler is not None:
+                self._scheduler.step()
+
+        losses = self.aggregate_loss_and_metrics(train_loss, train_size)
+        times = {
+            'forward': forward_time,
+            'loss': loss_time,
+            'backward': backward_time,
+        }
+
+        return losses, times
+
+    def validation_pass(self):
+        val_loss = 0
+        val_size = 0
+        val_metrics = list()
+
+        forward_time = 0
+        loss_time = 0
+
+        self.net.eval()
+        with torch.set_grad_enabled(False):
+            for (q_liq_fun, bsw, gor), (z_c, z_gl, obj) in self.val_data:
+                q_liq_fun = q_liq_fun.to(self.device)
+                bsw = bsw.to(self.device)
+                gor = gor.to(self.device)
+
+                z_c = z_c.to(self.device)
+                z_gl = z_gl.to(self.device)
+                obj = obj.to(self.device)
+
+                with self.autocast_if_mp():
+                    forward_time_, y_hat = timeit(self.net)(q_liq_fun, bsw, gor)
+                    forward_time += forward_time_
+
+                    loss_time_, loss, metrics = self.get_loss_and_metrics(y_hat, (q_liq_fun, bsw, gor, z_c, z_gl, obj), validation=True)
+                    loss_time += loss_time_
+
+                    val_metrics.append(metrics)
+
+                val_loss += loss.item() * len(obj)  # scales to data size
+                val_size += len(obj)
+
+        losses = self.aggregate_loss_and_metrics(val_loss, val_size, val_metrics)
+        times = {
+            'forward': forward_time,
+            'loss': loss_time,
+        }
+
+        return losses, times
+
+    def get_loss_and_metrics(self, y_hat, problem_data, validation=False):
+        q_liq_fun, bsw, gor, z_c, z_gl, obj = problem_data
+
+        start = time()
+        y_pred = torch.softmax(y_hat, -1)
+        z_c_hat = y_pred[:,0,:]
+        z_gl_hat = y_pred[:,1,:]
+
+        surr_obj = self.surrogate(q_liq_fun, bsw, gor, z_c_hat, z_gl_hat)
+        loss = - surr_obj
+        loss = loss.mean()
+
+        loss_time = time() - start
+
+        if validation:
+            with torch.no_grad():
+                z_c_argmax = z_c_hat.argmax(-1, keepdim=True)
+                z_c_hat_int = torch.zeros_like(z_c_hat).scatter_(-1, z_c_argmax, 1)
+
+                z_gl_argmax = z_gl_hat.argmax(-1, keepdim=True)
+                z_gl_hat_int = torch.zeros_like(z_gl_hat).scatter_(-1, z_gl_argmax, 1)
+
+                pairs = [decode_fixing(zc.cpu().numpy(), zgl.cpu().numpy(), well) for zc, zgl, well in zip(z_c_hat_int, z_gl_hat_int, self.test_wells)]
+                true_pairs = [decode_fixing(zc.cpu().numpy(), zgl.cpu().numpy(), well) for zc, zgl, well in zip(z_c, z_gl, self.test_wells)]
+                
+                real_obj = list()
+                for (c_pair, gl_pair), well in zip(pairs, self.test_wells):
+                    real_obj.append(self.ef_objs[well][(*c_pair, *gl_pair)])
+                real_obj = torch.Tensor(real_obj).to(obj)
+
+                surr_obj_gap = obj - surr_obj.squeeze(1)
+                rel_surr_obj_gap = surr_obj_gap / obj
+
+                real_obj_gap = obj - real_obj
+                rel_real_obj_gap = real_obj_gap / obj
+
+                z_c_dist = (z_c.argmax(-1) - z_c_hat.argmax(-1)).abs()
+                z_gl_dist = (z_gl.argmax(-1) - z_gl_hat.argmax(-1)).abs()
+
+            return loss_time, loss, (real_obj_gap, rel_real_obj_gap, surr_obj_gap, rel_surr_obj_gap, z_c_dist, z_gl_dist)
+        else:
+            return loss_time, loss
+
+    def aggregate_loss_and_metrics(self, loss, size, metrics=None):
+        # scale to data size
+        loss = loss / size
+
+        losses = {
+            'all': loss
+        }
+
+        if metrics is not None:
+            real_obj_gap = torch.hstack([m[0] for m in metrics])
+            rel_real_obj_gap = torch.hstack([m[1] for m in metrics])
+
+            surr_obj_gap = torch.hstack([m[2] for m in metrics])
+            rel_surr_obj_gap = torch.hstack([m[3] for m in metrics])
+
+            z_c_dist = torch.hstack([m[4] for m in metrics]).double()
+            z_gl_dist = torch.hstack([m[5] for m in metrics]).double()
+
+            losses['mean_surr_obj_gap'] = surr_obj_gap.mean()
+            losses['surr_obj_gap'] = surr_obj_gap.detach().cpu().numpy()
+            losses['rel_surr_obj_gap'] = rel_surr_obj_gap.detach().cpu().numpy()
+
+            losses['mean_real_obj_gap'] = real_obj_gap.mean()
+            losses['real_obj_gap'] = real_obj_gap.detach().cpu().numpy()
+            losses['rel_real_obj_gap'] = rel_real_obj_gap.detach().cpu().numpy()
+
+            losses['z_c_dist'] = z_c_dist.mean()
+            losses['z_gl_dist'] = z_gl_dist.mean()
+
+        return losses
+
+class FeasibilityTrainer(ObjectiveSurrogateTrainer):
+    def __init__(self, net: ObjSurrogate, ef_objs_fpath, epochs=5, lr=0.1, batch_size=2 ** 4, optimizer: str = 'Adam', optimizer_params: dict = None, loss_func: str = 'BCEWithLogitsLoss', lr_scheduler: str = None, lr_scheduler_params: dict = None, mixed_precision=True, device=None, wandb_project=None, wandb_group=None, logger=None, checkpoint_every=50, random_seed=42, max_loss=None) -> None:
+        super().__init__(net, ef_objs_fpath, epochs, lr, batch_size, optimizer, optimizer_params, loss_func, lr_scheduler, lr_scheduler_params, mixed_precision, device, wandb_project, wandb_group, logger, checkpoint_every, random_seed, max_loss)
+
+    def get_loss_and_metrics(self, y_hat, y, validation=False):
+        y = (y > 0).to(y)
+
+        loss_time, loss =  timeit(self._loss_func)(y_hat, y)
+
+        if validation:
+            # here you can compute performance metrics
+            y_pred = (torch.sigmoid(y_hat) > 0.5).to(y)
+            hits = (y_pred == y).sum()
+            return loss_time, loss, hits
+        else:
+            return loss_time, loss
+
+    def aggregate_loss_and_metrics(self, loss, size, metrics=None):
+        # scale to data size
+        loss = loss / size
+
+        losses = {
+            'all': loss
+        }
+
+        if metrics is not None:
+            losses['accuracy'] = sum(metrics) / size
+
+        return losses
+
+class GraphObjectiveSurrogateTrainer(Trainer):
+    def __init__(self, net: InstanceGCN, ef_objs_fpath, epochs=5, lr=0.1, batch_size=2**4, optimizer: str = 'Adam', optimizer_params: dict = None, loss_func: str = 'MSELoss', lr_scheduler: str = None, lr_scheduler_params: dict = None, mixed_precision=True, device=None, wandb_project=None, wandb_group=None, logger=None, checkpoint_every=50, random_seed=42, max_loss=None) -> None:
+        self.ef_objs_fpath = Path(ef_objs_fpath)
+        self.batch_size = int(batch_size)
+
+        self._add_to_wandb_config({
+            'batch_size': self.batch_size,
+        })
+
+        super().__init__(net, epochs, lr, optimizer, optimizer_params, loss_func, lr_scheduler, lr_scheduler_params, mixed_precision, device, wandb_project, wandb_group, logger, checkpoint_every, random_seed, max_loss)
+
+    def prepare_data(self):
+        with open(self.ef_objs_fpath, 'rb') as f:
+            ef_objs = pickle.load(f)
+
+        # ef_objs.pop('JUB-48', None)
+        # ef_objs.pop('JUB-55', None)
+        # ef_objs.pop('JUB-58', None)
+        ds = EarlyFixingGraphDataset(ef_objs)
+
+        indices = np.arange(len(ds))
+        np.random.shuffle(indices)
+
+        train_i = int(0.8 * len(ds))
+        train_sampler = SubsetRandomSampler(indices[:train_i])
+        test_sampler = SubsetRandomSampler(indices[train_i:])
+
+        self.data = GraphDataLoader(ds, batch_size=2**6, sampler=train_sampler)
+        self.val_data = GraphDataLoader(ds, batch_size=2**6, sampler=test_sampler)
+
+    def train_pass(self):
+        train_loss = 0
+        train_size = 0
+
+        forward_time = 0
+        loss_time = 0
+        backward_time = 0
+
+        self.net.train()
+        with torch.set_grad_enabled(True):
+            for g, y in self.data:
+                g = g.to(self.device)
+
+                nfeats = {k:v.double() for k,v in g.ndata['feat'].items()}
+                eweights = {k:v.double() for k,v in g.edata['weight'].items()}
+
+                y = y.to(self.device).double()
+
+                self._optim.zero_grad()
+
+                with self.autocast_if_mp():
+                    forward_time_, y_hat = timeit(self.net)(g, nfeats, eweights)
+                    forward_time += forward_time_
+
+                    loss_time_, loss = self.get_loss_and_metrics(y_hat, y.unsqueeze(-1))
+                    loss_time += loss_time_
+
+                if self.mixed_precision:
+                    backward_time_, _  = timeit(self._scaler.scale(loss).backward)()
+                    self._scaler.step(self._optim)
+                    self._scaler.update()
+                else:
+                    backward_time_, _  = timeit(loss.backward)()
+                    self._optim.step()
+                backward_time += backward_time_
+
+                train_loss += loss.item() * len(y)
+                train_size += len(y)
+
+            if self.lr_scheduler is not None:
+                self._scheduler.step()
+
+        losses = self.aggregate_loss_and_metrics(train_loss, train_size)
+        times = {
+            'forward': forward_time,
+            'loss': loss_time,
+            'backward': backward_time,
+        }
+
+        return losses, times
+
+    def validation_pass(self):
+        val_loss = 0
+        val_size = 0
+        val_metrics = list()
+
+        forward_time = 0
+        loss_time = 0
+
+        self.net.eval()
+        with torch.set_grad_enabled(False):
+            for g, y in self.data:
+                g = g.to(self.device)
+
+                nfeats = {k:v.double() for k,v in g.ndata['feat'].items()}
+                eweights = {k:v.double() for k,v in g.edata['weight'].items()}
+
+                y = y.to(self.device).double()
+
+                with self.autocast_if_mp():
+                    forward_time_, y_hat = timeit(self.net)(g, nfeats, eweights)
+                    forward_time += forward_time_
+
+                    loss_time_, loss, metrics = self.get_loss_and_metrics(y_hat, y.unsqueeze(-1), validation=True)
+                    loss_time += loss_time_
+
+                    val_metrics.append(metrics)
+
+                val_loss += loss.item() * len(y)  # scales to data size
+                val_size += len(y)
+
+        losses = self.aggregate_loss_and_metrics(val_loss, val_size, val_metrics)
+        times = {
+            'forward': forward_time,
+            'loss': loss_time,
+        }
+
+        return losses, times
+
+class GraphFeasibilityTrainer(GraphObjectiveSurrogateTrainer):
+    def __init__(self, net: ObjSurrogate, ef_objs_fpath, epochs=5, lr=0.1, batch_size=2 ** 4, optimizer: str = 'Adam', optimizer_params: dict = None, loss_func: str = 'BCEWithLogitsLoss', lr_scheduler: str = None, lr_scheduler_params: dict = None, mixed_precision=True, device=None, wandb_project=None, wandb_group=None, logger=None, checkpoint_every=50, random_seed=42, max_loss=None) -> None:
+        super().__init__(net, ef_objs_fpath, epochs, lr, batch_size, optimizer, optimizer_params, loss_func, lr_scheduler, lr_scheduler_params, mixed_precision, device, wandb_project, wandb_group, logger, checkpoint_every, random_seed, max_loss)
+
+    def get_loss_and_metrics(self, y_hat, y, validation=False):
+        y = (y > 0).to(y)
+
+        loss_time, loss =  timeit(self._loss_func)(y_hat, y)
+
+        if validation:
+            # here you can compute performance metrics
+            y_pred = (torch.sigmoid(y_hat) > 0.5).to(y)
+            hits = (y_pred == y).sum()
+            return loss_time, loss, hits
+        else:
+            return loss_time, loss
+
+    def aggregate_loss_and_metrics(self, loss, size, metrics=None):
+        # scale to data size
+        loss = loss / size
+
+        losses = {
+            'all': loss
+        }
+
+        if metrics is not None:
+            losses['accuracy'] = sum(metrics) / size
+
+        return losses

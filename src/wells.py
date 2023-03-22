@@ -5,12 +5,14 @@ WELLS = [
 ]
 
 bsw_n = {
-    'JUB-55': 31.8 / 100.0,         # valores para o mr2. Valores do mr3 são sobreescritos abaixo
+    # 'JUB-55': 31.8 / 100.0,         # valores para o mr2. Valores do mr3 são sobreescritos abaixo
+    'JUB-55': 44.4 / 100.0,         # valores para o mr2. Valores do mr3 são sobreescritos abaixo
     'JUB-58': 36.82 / 100.0,
     'JUB-48': 51.1 / 100.0
          }
 gor_n = {
-    'JUB-55': 173.6,
+    # 'JUB-55': 173.6,
+    'JUB-55': 253.2,
     'JUB-58': 284.9,
     'JUB-48': 267.04
 }
@@ -27,9 +29,6 @@ q_gl_max = 300000.0
 CKP_MAX = 1e3
 LGR_MAX = 1e4
 TOL = 1e-5
-
-bsw_n['JUB-55'] = 44.4 / 100.0
-gor_n['JUB-55'] = 253.2
 
 # Curvas de produção
 Q_LIQ_N_FUN = {
