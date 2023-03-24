@@ -6,7 +6,7 @@ from dgl.nn import HeteroGraphConv, GraphConv, EGATConv, SAGEConv
 
 
 class ObjSurrogate(nn.Module):
-    def __init__(self, n_in=48, layers=[40, 20, 10, 10, 10], add_dropout=False) -> None:
+    def __init__(self, n_in=49, layers=[40, 20, 10, 10, 10], add_dropout=False) -> None:
         super().__init__()
         hidden_layers = list()
 
@@ -14,7 +14,7 @@ class ObjSurrogate(nn.Module):
         for n_hidden in layers:
             hidden_layers += [
                 nn.Linear(n_hidden_prior, n_hidden),
-                nn.Dropout(p=0.05),
+                nn.Dropout(p=0.2),
                 nn.ReLU(),
             ]
             n_hidden_prior = n_hidden
@@ -38,17 +38,17 @@ class ObjSurrogate(nn.Module):
             self.net[3:]
         )
 
-    def forward(self, q_liq_fun, bsw, gor, z_c, z_gl):
+    def forward(self, q_liq_fun, bsw, gor, z_c, z_gl, q_gl_max):
         q_liq_fun_flat = q_liq_fun.flatten(1)
 
         # x = torch.hstack([C / 1e2, GL / 1e5, q_liq_fun_flat / 1e3, bsw.unsqueeze(1), gor.unsqueeze(1) / 1e2, z_c, z_gl])
-        x = torch.hstack([z_c, z_gl, q_liq_fun_flat / 5e3, bsw.unsqueeze(1), gor.unsqueeze(1) / 1e3])
+        x = torch.hstack([z_c, z_gl, q_liq_fun_flat / 5e3, bsw.unsqueeze(1), gor.unsqueeze(1) / 1e3, (q_gl_max.unsqueeze(1) - 1e5) / 2e5])
         # x = torch.hstack([z_c, z_gl, bsw.unsqueeze(1), gor.unsqueeze(1) / 1e2])
 
         return self.net(x) * 2e3
 
 class Fixer(nn.Module):
-    def __init__(self, n_in=38, layers=[10, 10, 10]) -> None:
+    def __init__(self, n_in=39, layers=[10, 10, 10]) -> None:
         super().__init__()
         hidden_layers = list()
 
@@ -68,11 +68,11 @@ class Fixer(nn.Module):
 
         self.net = nn.Sequential(*hidden_layers)
 
-    def forward(self, q_liq_fun, bsw, gor):
+    def forward(self, q_liq_fun, bsw, gor, q_gl_max):
         q_liq_fun_flat = q_liq_fun.flatten(1)
 
         # x = torch.hstack([C / 1e2, GL / 1e5, q_liq_fun_flat / 1e3, bsw.unsqueeze(1), gor.unsqueeze(1) / 1e2, z_c, z_gl])
-        x = torch.hstack([q_liq_fun_flat / 5e3, bsw.unsqueeze(1), gor.unsqueeze(1) / 1e3])
+        x = torch.hstack([q_liq_fun_flat / 5e3, bsw.unsqueeze(1), gor.unsqueeze(1) / 1e3, (q_gl_max.unsqueeze(1) - 1e5) / 2e5])
         # x = torch.hstack([z_c, z_gl, bsw.unsqueeze(1), gor.unsqueeze(1) / 1e2])
 
         logits = self.net(x)

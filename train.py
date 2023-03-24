@@ -3,7 +3,7 @@ import torch
 import torch.nn
 
 from src.net import InstanceGCN, ObjSurrogate, Fixer
-from src.trainer import FeasibilityTrainer, ObjectiveSurrogateTrainer, GraphObjectiveSurrogateTrainer, GraphFeasibilityTrainer, EarlyFixingTrainer
+from src.trainer import FeasibilityTrainer, ObjectiveSurrogateTrainer, EarlyFixingTrainer
 from src.utils import debugger_is_active, load_from_wandb
 
 
@@ -25,42 +25,36 @@ if __name__ == '__main__':
         seed = None
         wandb_project = 'gef-fs'
 
-    # net = ObjSurrogate(layers=[20, 10, 10, 10]).double()
+    # net = ObjSurrogate(layers=[40, 20, 10, 10, 10]).double()
     # FeasibilityTrainer(
     #     net,
     #     'ef_objs.pkl',
     #     lr=.01,
-    #     epochs=1000,
+    #     epochs=25,
     #     wandb_project=wandb_project,
     #     random_seed=seed,
     #     device=device,
     # ).run()
 
-    # net = ObjSurrogate(layers=[40, 20, 10, 10, 10])
-    # net = load_from_wandb(net, '2vmhnprj', 'gef-fs')
-    # # net = ObjSurrogate(layers=[20, 20, 20])
-    # # net = load_from_wandb(net, 'tf342dcj', 'gef-fs')
-
-    # # add dropout
-    # # net.add_dropout()
-
+    # net = ObjSurrogate(layers=[40, 20, 20, 20, 20])
+    # # net = load_from_wandb(net, 'anfmnk7e', 'gef-fs')
     # ObjectiveSurrogateTrainer(
     #     net.double(),
     #     'ef_objs.pkl',
     #     lr=.001,
-    #     epochs=2000,
+    #     epochs=50,
     #     wandb_project=wandb_project,
     #     random_seed=seed,
     #     device=device,
     # ).run()
 
-    surrogate = load_from_wandb(ObjSurrogate(), '3qd2aikn', 'gef-fs').double()
+    surrogate = load_from_wandb(ObjSurrogate(layers=[40, 20, 20, 20, 20]), 's8whau88', 'gef-fs').double()
     EarlyFixingTrainer(
-        Fixer().double(),
+        Fixer(layers=[100, 100, 100, 100, 100]).double(),
         surrogate,
         'ef_objs.pkl',
         lr=.01,
-        epochs=1000,
+        epochs=100000,
         wandb_project=wandb_project,
         random_seed=seed,
         device=device,

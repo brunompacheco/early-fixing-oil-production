@@ -5,13 +5,12 @@ import gurobipy as gp
 from gurobipy import GRB
 
 
-def get_model(wells: List[dict], avoid_infeasible=True, verbose=False):
+def get_model(wells: List[dict], avoid_infeasible=True, q_gl_max=300000, verbose=False):
     N = list(range(len(wells)))
     M = [0,]  # manifolds
 
     q_liq_max = 100000.0
     q_gas_max = 300000.0
-    q_gl_max = 300000.0
 
     Q_LIQ_N_FUN = [well['curve'] for well in wells]
     bsw_n = [well['bsw'] for well in wells]
@@ -123,6 +122,8 @@ def get_model(wells: List[dict], avoid_infeasible=True, verbose=False):
         # Q_gl compatível com variáveis de combinação convexa
         model.addConstr(q_gl_n[n] == gp.quicksum(lmbd_n_c_gl[n, c, gl] * gl for c in C[n] for gl in GL[n]))  # 21b
         model.addConstr(q_liq_n[n] == gp.quicksum(lmbd_n_c_gl[n, c, gl] * Q_LIQ_N_FUN[n][c, gl] for c in C[n] for gl in GL[n]))  # 21c
+
+        model.addConstr(q_gl_n[n] <= q_gl_max)  # new constraint
 
     for n in N:
         for ckp in C[n]:

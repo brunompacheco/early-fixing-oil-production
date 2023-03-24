@@ -14,7 +14,7 @@ from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader, SubsetRandomSampler
 from dgl.dataloading import GraphDataLoader
 
-from src.dataset import EarlyFixingDataset, WellObjDataset, EarlyFixingGraphDataset
+from src.dataset import EarlyFixingDataset, WellObjDataset
 from src.model import decode_fixing
 from src.net import ObjSurrogate, InstanceGCN, Fixer
 from src.utils import timeit
@@ -160,7 +160,7 @@ class Trainer(ABC):
             self._scheduler = Scheduler(self._optim, **self.lr_scheduler_params)
             self._scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
 
-        self._loss_func = eval(f"nn.{self.loss_func}(pos_weight=0.2)")
+        self._loss_func = eval(f"nn.{self.loss_func}(pos_weight=0.33)")
         # self._loss_func = eval(f"nn.{self.loss_func}()")
 
         if self.mixed_precision:
@@ -494,7 +494,7 @@ class ObjectiveSurrogateTrainer(Trainer):
         ds_train = WellObjDataset(ef_objs_train)
         ds_test = WellObjDataset(ef_objs_test)
 
-        self.data = DataLoader(ds_train, 2**6, shuffle=True)
+        self.data = DataLoader(ds_train, 2**8, shuffle=True)
         self.val_data = DataLoader(ds_test, 2**6)
 
     def train_pass(self):
@@ -507,19 +507,20 @@ class ObjectiveSurrogateTrainer(Trainer):
 
         self.net.train()
         with torch.set_grad_enabled(True):
-            for (q_liq_fun, bsw, gor, z_c, z_gl), y in self.data:
+            for (q_liq_fun, bsw, gor, z_c, z_gl, q_gl_max), y in self.data:
                 q_liq_fun = q_liq_fun.to(self.device)
                 bsw = bsw.to(self.device)
                 gor = gor.to(self.device)
                 z_c = z_c.to(self.device)
                 z_gl = z_gl.to(self.device)
+                q_gl_max = q_gl_max.to(self.device)
 
                 y = y.to(self.device).double()
 
                 self._optim.zero_grad()
 
                 with self.autocast_if_mp():
-                    forward_time_, y_hat = timeit(self.net)(q_liq_fun, bsw, gor, z_c, z_gl)
+                    forward_time_, y_hat = timeit(self.net)(q_liq_fun, bsw, gor, z_c, z_gl, q_gl_max)
                     forward_time += forward_time_
 
                     loss_time_, loss = self.get_loss_and_metrics(y_hat, y.unsqueeze(-1))
@@ -559,17 +560,18 @@ class ObjectiveSurrogateTrainer(Trainer):
 
         self.net.eval()
         with torch.set_grad_enabled(False):
-            for (q_liq_fun, bsw, gor, z_c, z_gl), y in self.val_data:
+            for (q_liq_fun, bsw, gor, z_c, z_gl, q_gl_max), y in self.val_data:
                 q_liq_fun = q_liq_fun.to(self.device)
                 bsw = bsw.to(self.device)
                 gor = gor.to(self.device)
                 z_c = z_c.to(self.device)
                 z_gl = z_gl.to(self.device)
+                q_gl_max = q_gl_max.to(self.device)
 
                 y = y.to(self.device).double()
 
                 with self.autocast_if_mp():
-                    forward_time_, y_hat = timeit(self.net)(q_liq_fun, bsw, gor, z_c, z_gl)
+                    forward_time_, y_hat = timeit(self.net)(q_liq_fun, bsw, gor, z_c, z_gl, q_gl_max)
                     forward_time += forward_time_
 
                     loss_time_, loss, metrics = self.get_loss_and_metrics(y_hat, y.unsqueeze(-1), validation=True)
@@ -652,20 +654,22 @@ class EarlyFixingTrainer(Trainer):
 
         self.net.train()
         with torch.set_grad_enabled(True):
-            for (q_liq_fun, bsw, gor), (z_c, z_gl, obj) in self.data:
+            for (q_liq_fun, bsw, gor, q_gl_max), (z_c, z_gl, obj, well_i) in self.data:
                 q_liq_fun = q_liq_fun.to(self.device)
                 bsw = bsw.to(self.device)
                 gor = gor.to(self.device)
+                q_gl_max = q_gl_max.to(self.device)
 
                 z_c = z_c.to(self.device)
                 z_gl = z_gl.to(self.device)
                 obj = obj.to(self.device)
+                well_i = well_i.to(self.device)
 
                 with self.autocast_if_mp():
-                    forward_time_, y_hat = timeit(self.net)(q_liq_fun, bsw, gor)
+                    forward_time_, y_hat = timeit(self.net)(q_liq_fun, bsw, gor, q_gl_max)
                     forward_time += forward_time_
 
-                    loss_time_, loss = self.get_loss_and_metrics(y_hat, (q_liq_fun, bsw, gor, z_c, z_gl, obj))
+                    loss_time_, loss = self.get_loss_and_metrics(y_hat, (q_liq_fun, bsw, gor, q_gl_max, z_c, z_gl, obj, well_i))
                     loss_time += loss_time_
 
                 if self.mixed_precision:
@@ -702,20 +706,22 @@ class EarlyFixingTrainer(Trainer):
 
         self.net.eval()
         with torch.set_grad_enabled(False):
-            for (q_liq_fun, bsw, gor), (z_c, z_gl, obj) in self.val_data:
+            for (q_liq_fun, bsw, gor, q_gl_max), (z_c, z_gl, obj, well_i) in self.val_data:
                 q_liq_fun = q_liq_fun.to(self.device)
                 bsw = bsw.to(self.device)
                 gor = gor.to(self.device)
+                q_gl_max = q_gl_max.to(self.device)
 
                 z_c = z_c.to(self.device)
                 z_gl = z_gl.to(self.device)
                 obj = obj.to(self.device)
+                well_i = well_i.to(self.device)
 
                 with self.autocast_if_mp():
-                    forward_time_, y_hat = timeit(self.net)(q_liq_fun, bsw, gor)
+                    forward_time_, y_hat = timeit(self.net)(q_liq_fun, bsw, gor, q_gl_max)
                     forward_time += forward_time_
 
-                    loss_time_, loss, metrics = self.get_loss_and_metrics(y_hat, (q_liq_fun, bsw, gor, z_c, z_gl, obj), validation=True)
+                    loss_time_, loss, metrics = self.get_loss_and_metrics(y_hat, (q_liq_fun, bsw, gor, q_gl_max, z_c, z_gl, obj, well_i), validation=True)
                     loss_time += loss_time_
 
                     val_metrics.append(metrics)
@@ -732,14 +738,14 @@ class EarlyFixingTrainer(Trainer):
         return losses, times
 
     def get_loss_and_metrics(self, y_hat, problem_data, validation=False):
-        q_liq_fun, bsw, gor, z_c, z_gl, obj = problem_data
+        q_liq_fun, bsw, gor, q_gl_max, z_c, z_gl, obj, well_ix = problem_data
 
         start = time()
         y_pred = torch.softmax(y_hat, -1)
         z_c_hat = y_pred[:,0,:]
         z_gl_hat = y_pred[:,1,:]
 
-        surr_obj = self.surrogate(q_liq_fun, bsw, gor, z_c_hat, z_gl_hat)
+        surr_obj = self.surrogate(q_liq_fun, bsw, gor, z_c_hat, z_gl_hat, q_gl_max)
         loss = - surr_obj
         loss = loss.mean()
 
@@ -753,12 +759,14 @@ class EarlyFixingTrainer(Trainer):
                 z_gl_argmax = z_gl_hat.argmax(-1, keepdim=True)
                 z_gl_hat_int = torch.zeros_like(z_gl_hat).scatter_(-1, z_gl_argmax, 1)
 
-                pairs = [decode_fixing(zc.cpu().numpy(), zgl.cpu().numpy(), well) for zc, zgl, well in zip(z_c_hat_int, z_gl_hat_int, self.test_wells)]
-                true_pairs = [decode_fixing(zc.cpu().numpy(), zgl.cpu().numpy(), well) for zc, zgl, well in zip(z_c, z_gl, self.test_wells)]
-                
+                pairs = list()
+                for well_i, zc, zgl in zip(well_ix, z_c_hat_int, z_gl_hat_int):
+                    pairs.append(decode_fixing(zc.cpu().numpy(), zgl.cpu().numpy(), self.test_wells[well_i]))
+
                 real_obj = list()
-                for (c_pair, gl_pair), well in zip(pairs, self.test_wells):
-                    real_obj.append(self.ef_objs[well][(*c_pair, *gl_pair)])
+                for (c_pair, gl_pair), qglm, well_i in zip(pairs, q_gl_max, well_ix):
+                    well = self.test_wells[well_i]
+                    real_obj.append(self.ef_objs[well][(*c_pair, *gl_pair, qglm.item())])
                 real_obj = torch.Tensor(real_obj).to(obj)
 
                 surr_obj_gap = obj - surr_obj.squeeze(1)
@@ -806,155 +814,6 @@ class EarlyFixingTrainer(Trainer):
         return losses
 
 class FeasibilityTrainer(ObjectiveSurrogateTrainer):
-    def __init__(self, net: ObjSurrogate, ef_objs_fpath, epochs=5, lr=0.1, batch_size=2 ** 4, optimizer: str = 'Adam', optimizer_params: dict = None, loss_func: str = 'BCEWithLogitsLoss', lr_scheduler: str = None, lr_scheduler_params: dict = None, mixed_precision=True, device=None, wandb_project=None, wandb_group=None, logger=None, checkpoint_every=50, random_seed=42, max_loss=None) -> None:
-        super().__init__(net, ef_objs_fpath, epochs, lr, batch_size, optimizer, optimizer_params, loss_func, lr_scheduler, lr_scheduler_params, mixed_precision, device, wandb_project, wandb_group, logger, checkpoint_every, random_seed, max_loss)
-
-    def get_loss_and_metrics(self, y_hat, y, validation=False):
-        y = (y > 0).to(y)
-
-        loss_time, loss =  timeit(self._loss_func)(y_hat, y)
-
-        if validation:
-            # here you can compute performance metrics
-            y_pred = (torch.sigmoid(y_hat) > 0.5).to(y)
-            hits = (y_pred == y).sum()
-            return loss_time, loss, hits
-        else:
-            return loss_time, loss
-
-    def aggregate_loss_and_metrics(self, loss, size, metrics=None):
-        # scale to data size
-        loss = loss / size
-
-        losses = {
-            'all': loss
-        }
-
-        if metrics is not None:
-            losses['accuracy'] = sum(metrics) / size
-
-        return losses
-
-class GraphObjectiveSurrogateTrainer(Trainer):
-    def __init__(self, net: InstanceGCN, ef_objs_fpath, epochs=5, lr=0.1, batch_size=2**4, optimizer: str = 'Adam', optimizer_params: dict = None, loss_func: str = 'MSELoss', lr_scheduler: str = None, lr_scheduler_params: dict = None, mixed_precision=True, device=None, wandb_project=None, wandb_group=None, logger=None, checkpoint_every=50, random_seed=42, max_loss=None) -> None:
-        self.ef_objs_fpath = Path(ef_objs_fpath)
-        self.batch_size = int(batch_size)
-
-        self._add_to_wandb_config({
-            'batch_size': self.batch_size,
-        })
-
-        super().__init__(net, epochs, lr, optimizer, optimizer_params, loss_func, lr_scheduler, lr_scheduler_params, mixed_precision, device, wandb_project, wandb_group, logger, checkpoint_every, random_seed, max_loss)
-
-    def prepare_data(self):
-        with open(self.ef_objs_fpath, 'rb') as f:
-            ef_objs = pickle.load(f)
-
-        # ef_objs.pop('JUB-48', None)
-        # ef_objs.pop('JUB-55', None)
-        # ef_objs.pop('JUB-58', None)
-        ds = EarlyFixingGraphDataset(ef_objs)
-
-        indices = np.arange(len(ds))
-        np.random.shuffle(indices)
-
-        train_i = int(0.8 * len(ds))
-        train_sampler = SubsetRandomSampler(indices[:train_i])
-        test_sampler = SubsetRandomSampler(indices[train_i:])
-
-        self.data = GraphDataLoader(ds, batch_size=2**6, sampler=train_sampler)
-        self.val_data = GraphDataLoader(ds, batch_size=2**6, sampler=test_sampler)
-
-    def train_pass(self):
-        train_loss = 0
-        train_size = 0
-
-        forward_time = 0
-        loss_time = 0
-        backward_time = 0
-
-        self.net.train()
-        with torch.set_grad_enabled(True):
-            for g, y in self.data:
-                g = g.to(self.device)
-
-                nfeats = {k:v.double() for k,v in g.ndata['feat'].items()}
-                eweights = {k:v.double() for k,v in g.edata['weight'].items()}
-
-                y = y.to(self.device).double()
-
-                self._optim.zero_grad()
-
-                with self.autocast_if_mp():
-                    forward_time_, y_hat = timeit(self.net)(g, nfeats, eweights)
-                    forward_time += forward_time_
-
-                    loss_time_, loss = self.get_loss_and_metrics(y_hat, y.unsqueeze(-1))
-                    loss_time += loss_time_
-
-                if self.mixed_precision:
-                    backward_time_, _  = timeit(self._scaler.scale(loss).backward)()
-                    self._scaler.step(self._optim)
-                    self._scaler.update()
-                else:
-                    backward_time_, _  = timeit(loss.backward)()
-                    self._optim.step()
-                backward_time += backward_time_
-
-                train_loss += loss.item() * len(y)
-                train_size += len(y)
-
-            if self.lr_scheduler is not None:
-                self._scheduler.step()
-
-        losses = self.aggregate_loss_and_metrics(train_loss, train_size)
-        times = {
-            'forward': forward_time,
-            'loss': loss_time,
-            'backward': backward_time,
-        }
-
-        return losses, times
-
-    def validation_pass(self):
-        val_loss = 0
-        val_size = 0
-        val_metrics = list()
-
-        forward_time = 0
-        loss_time = 0
-
-        self.net.eval()
-        with torch.set_grad_enabled(False):
-            for g, y in self.data:
-                g = g.to(self.device)
-
-                nfeats = {k:v.double() for k,v in g.ndata['feat'].items()}
-                eweights = {k:v.double() for k,v in g.edata['weight'].items()}
-
-                y = y.to(self.device).double()
-
-                with self.autocast_if_mp():
-                    forward_time_, y_hat = timeit(self.net)(g, nfeats, eweights)
-                    forward_time += forward_time_
-
-                    loss_time_, loss, metrics = self.get_loss_and_metrics(y_hat, y.unsqueeze(-1), validation=True)
-                    loss_time += loss_time_
-
-                    val_metrics.append(metrics)
-
-                val_loss += loss.item() * len(y)  # scales to data size
-                val_size += len(y)
-
-        losses = self.aggregate_loss_and_metrics(val_loss, val_size, val_metrics)
-        times = {
-            'forward': forward_time,
-            'loss': loss_time,
-        }
-
-        return losses, times
-
-class GraphFeasibilityTrainer(GraphObjectiveSurrogateTrainer):
     def __init__(self, net: ObjSurrogate, ef_objs_fpath, epochs=5, lr=0.1, batch_size=2 ** 4, optimizer: str = 'Adam', optimizer_params: dict = None, loss_func: str = 'BCEWithLogitsLoss', lr_scheduler: str = None, lr_scheduler_params: dict = None, mixed_precision=True, device=None, wandb_project=None, wandb_group=None, logger=None, checkpoint_every=50, random_seed=42, max_loss=None) -> None:
         super().__init__(net, ef_objs_fpath, epochs, lr, batch_size, optimizer, optimizer_params, loss_func, lr_scheduler, lr_scheduler_params, mixed_precision, device, wandb_project, wandb_group, logger, checkpoint_every, random_seed, max_loss)
 
