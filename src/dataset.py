@@ -53,15 +53,16 @@ class EarlyFixingDataset(Dataset):
 
             C, GL = get_C_GL(well_name)
 
-            q_liq_fun = -1 * np.ones((len(C), len(GL)))
-            for i in range(len(C)):
-                for j in range(len(GL)):
-                    try:
-                        q_liq_fun[i,j] = well['curve'][C[i], GL[j]]
-                    except KeyError:
-                        q_liq_fun[i,j] = -1.
+            # q_liq_fun = -1 * np.ones((len(C), len(GL)))
+            # for i in range(len(C)):
+            #     for j in range(len(GL)):
+            #         try:
+            #             q_liq_fun[i,j] = well['curve'][C[i], GL[j]]
+            #         except KeyError:
+            #             q_liq_fun[i,j] = -1.
 
-            self.well_data[well_name] = (q_liq_fun, well['bsw'], well['gor'])
+            # self.well_data[well_name] = (q_liq_fun, well['bsw'], well['gor'])
+            self.well_data[well_name] = (well['bsw'], well['gor'])
 
     def __len__(self):
         return sum(len(q_gl_maxs) for q_gl_maxs in self.q_gl_maxs.values())
@@ -83,10 +84,12 @@ class EarlyFixingDataset(Dataset):
         
         q_gl_max = self.q_gl_maxs[well_name][i]
 
-        q_liq_fun, bsw, gor = self.well_data[well_name]
+        # q_liq_fun, bsw, gor = self.well_data[well_name]
+        bsw, gor = self.well_data[well_name]
         c_mbd, gl_mbd, obj = self.targets[well_name][q_gl_max]
 
-        return (q_liq_fun, bsw, gor, q_gl_max), (c_mbd, gl_mbd, obj, well_i)
+        # return (q_liq_fun, bsw, gor, q_gl_max), (c_mbd, gl_mbd, obj, well_i)
+        return (bsw, gor, q_gl_max), (c_mbd, gl_mbd, obj, well_i)
 
 class WellObjDataset(Dataset):
     def __init__(self, ef_objs, wells_dir='/home/bruno/gef-fs/data/raw') -> None:
@@ -112,15 +115,16 @@ class WellObjDataset(Dataset):
 
             C, GL = get_C_GL(well_name)
 
-            q_liq_fun = -1 * np.ones((len(C), len(GL)))
-            for i in range(len(C)):
-                for j in range(len(GL)):
-                    try:
-                        q_liq_fun[i,j] = well['curve'][C[i], GL[j]]
-                    except KeyError:
-                        q_liq_fun[i,j] = -1.
+            # q_liq_fun = -1 * np.ones((len(C), len(GL)))
+            # for i in range(len(C)):
+            #     for j in range(len(GL)):
+            #         try:
+            #             q_liq_fun[i,j] = well['curve'][C[i], GL[j]]
+            #         except KeyError:
+            #             q_liq_fun[i,j] = -1.
 
-            self.well_data.append((q_liq_fun, well['bsw'], well['gor']))
+            # self.well_data.append((q_liq_fun, well['bsw'], well['gor']))
+            self.well_data.append((well['bsw'], well['gor']))
 
         self.wells = list(ef_objs.keys())
 
@@ -140,9 +144,11 @@ class WellObjDataset(Dataset):
             else:
                 i -= n_samples
 
-        q_liq_fun, bsw, gor = self.well_data[n]
+        # q_liq_fun, bsw, gor = self.well_data[n]
+        bsw, gor = self.well_data[n]
 
         c_mbd, gl_mbd, q_gl_max = self.ef_objs[n]['x'][i]
         y = self.ef_objs[n]['y'][i]
 
-        return (q_liq_fun, bsw, gor, c_mbd, gl_mbd, q_gl_max), y
+        # return (q_liq_fun, bsw, gor, c_mbd, gl_mbd, q_gl_max), y
+        return (bsw, gor, c_mbd, gl_mbd, q_gl_max), y

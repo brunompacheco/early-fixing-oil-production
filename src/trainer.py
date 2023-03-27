@@ -494,7 +494,7 @@ class ObjectiveSurrogateTrainer(Trainer):
         ds_train = WellObjDataset(ef_objs_train)
         ds_test = WellObjDataset(ef_objs_test)
 
-        self.data = DataLoader(ds_train, 2**8, shuffle=True)
+        self.data = DataLoader(ds_train, 2**10, shuffle=True)
         self.val_data = DataLoader(ds_test, 2**6)
 
     def train_pass(self):
@@ -507,8 +507,9 @@ class ObjectiveSurrogateTrainer(Trainer):
 
         self.net.train()
         with torch.set_grad_enabled(True):
-            for (q_liq_fun, bsw, gor, z_c, z_gl, q_gl_max), y in self.data:
-                q_liq_fun = q_liq_fun.to(self.device)
+            # for (q_liq_fun, bsw, gor, z_c, z_gl, q_gl_max), y in self.data:
+            for (bsw, gor, z_c, z_gl, q_gl_max), y in self.data:
+                # q_liq_fun = q_liq_fun.to(self.device)
                 bsw = bsw.to(self.device)
                 gor = gor.to(self.device)
                 z_c = z_c.to(self.device)
@@ -520,7 +521,8 @@ class ObjectiveSurrogateTrainer(Trainer):
                 self._optim.zero_grad()
 
                 with self.autocast_if_mp():
-                    forward_time_, y_hat = timeit(self.net)(q_liq_fun, bsw, gor, z_c, z_gl, q_gl_max)
+                    # forward_time_, y_hat = timeit(self.net)(q_liq_fun, bsw, gor, z_c, z_gl, q_gl_max)
+                    forward_time_, y_hat = timeit(self.net)(bsw, gor, z_c, z_gl, q_gl_max)
                     forward_time += forward_time_
 
                     loss_time_, loss = self.get_loss_and_metrics(y_hat, y.unsqueeze(-1))
@@ -560,8 +562,9 @@ class ObjectiveSurrogateTrainer(Trainer):
 
         self.net.eval()
         with torch.set_grad_enabled(False):
-            for (q_liq_fun, bsw, gor, z_c, z_gl, q_gl_max), y in self.val_data:
-                q_liq_fun = q_liq_fun.to(self.device)
+            # for (q_liq_fun, bsw, gor, z_c, z_gl, q_gl_max), y in self.val_data:
+            for (bsw, gor, z_c, z_gl, q_gl_max), y in self.val_data:
+                # q_liq_fun = q_liq_fun.to(self.device)
                 bsw = bsw.to(self.device)
                 gor = gor.to(self.device)
                 z_c = z_c.to(self.device)
@@ -571,7 +574,8 @@ class ObjectiveSurrogateTrainer(Trainer):
                 y = y.to(self.device).double()
 
                 with self.autocast_if_mp():
-                    forward_time_, y_hat = timeit(self.net)(q_liq_fun, bsw, gor, z_c, z_gl, q_gl_max)
+                    # forward_time_, y_hat = timeit(self.net)(q_liq_fun, bsw, gor, z_c, z_gl, q_gl_max)
+                    forward_time_, y_hat = timeit(self.net)(bsw, gor, z_c, z_gl, q_gl_max)
                     forward_time += forward_time_
 
                     loss_time_, loss, metrics = self.get_loss_and_metrics(y_hat, y.unsqueeze(-1), validation=True)
@@ -654,8 +658,9 @@ class EarlyFixingTrainer(Trainer):
 
         self.net.train()
         with torch.set_grad_enabled(True):
-            for (q_liq_fun, bsw, gor, q_gl_max), (z_c, z_gl, obj, well_i) in self.data:
-                q_liq_fun = q_liq_fun.to(self.device)
+            # for (q_liq_fun, bsw, gor, q_gl_max), (z_c, z_gl, obj, well_i) in self.data:
+            for (bsw, gor, q_gl_max), (z_c, z_gl, obj, well_i) in self.data:
+                # q_liq_fun = q_liq_fun.to(self.device)
                 bsw = bsw.to(self.device)
                 gor = gor.to(self.device)
                 q_gl_max = q_gl_max.to(self.device)
@@ -666,10 +671,12 @@ class EarlyFixingTrainer(Trainer):
                 well_i = well_i.to(self.device)
 
                 with self.autocast_if_mp():
-                    forward_time_, y_hat = timeit(self.net)(q_liq_fun, bsw, gor, q_gl_max)
+                    # forward_time_, y_hat = timeit(self.net)(q_liq_fun, bsw, gor, q_gl_max)
+                    forward_time_, y_hat = timeit(self.net)(bsw, gor, q_gl_max)
                     forward_time += forward_time_
 
-                    loss_time_, loss = self.get_loss_and_metrics(y_hat, (q_liq_fun, bsw, gor, q_gl_max, z_c, z_gl, obj, well_i))
+                    # loss_time_, loss = self.get_loss_and_metrics(y_hat, (q_liq_fun, bsw, gor, q_gl_max, z_c, z_gl, obj, well_i))
+                    loss_time_, loss = self.get_loss_and_metrics(y_hat, (bsw, gor, q_gl_max, z_c, z_gl, obj, well_i))
                     loss_time += loss_time_
 
                 if self.mixed_precision:
@@ -706,8 +713,9 @@ class EarlyFixingTrainer(Trainer):
 
         self.net.eval()
         with torch.set_grad_enabled(False):
-            for (q_liq_fun, bsw, gor, q_gl_max), (z_c, z_gl, obj, well_i) in self.val_data:
-                q_liq_fun = q_liq_fun.to(self.device)
+            # for (q_liq_fun, bsw, gor, q_gl_max), (z_c, z_gl, obj, well_i) in self.val_data:
+            for (bsw, gor, q_gl_max), (z_c, z_gl, obj, well_i) in self.val_data:
+                # q_liq_fun = q_liq_fun.to(self.device)
                 bsw = bsw.to(self.device)
                 gor = gor.to(self.device)
                 q_gl_max = q_gl_max.to(self.device)
@@ -718,10 +726,12 @@ class EarlyFixingTrainer(Trainer):
                 well_i = well_i.to(self.device)
 
                 with self.autocast_if_mp():
-                    forward_time_, y_hat = timeit(self.net)(q_liq_fun, bsw, gor, q_gl_max)
+                    # forward_time_, y_hat = timeit(self.net)(q_liq_fun, bsw, gor, q_gl_max)
+                    forward_time_, y_hat = timeit(self.net)(bsw, gor, q_gl_max)
                     forward_time += forward_time_
 
-                    loss_time_, loss, metrics = self.get_loss_and_metrics(y_hat, (q_liq_fun, bsw, gor, q_gl_max, z_c, z_gl, obj, well_i), validation=True)
+                    # loss_time_, loss, metrics = self.get_loss_and_metrics(y_hat, (q_liq_fun, bsw, gor, q_gl_max, z_c, z_gl, obj, well_i), validation=True)
+                    loss_time_, loss, metrics = self.get_loss_and_metrics(y_hat, (bsw, gor, q_gl_max, z_c, z_gl, obj, well_i), validation=True)
                     loss_time += loss_time_
 
                     val_metrics.append(metrics)
@@ -738,14 +748,16 @@ class EarlyFixingTrainer(Trainer):
         return losses, times
 
     def get_loss_and_metrics(self, y_hat, problem_data, validation=False):
-        q_liq_fun, bsw, gor, q_gl_max, z_c, z_gl, obj, well_ix = problem_data
+        # q_liq_fun, bsw, gor, q_gl_max, z_c, z_gl, obj, well_ix = problem_data
+        bsw, gor, q_gl_max, z_c, z_gl, obj, well_ix = problem_data
 
         start = time()
         y_pred = torch.softmax(y_hat, -1)
         z_c_hat = y_pred[:,0,:]
         z_gl_hat = y_pred[:,1,:]
 
-        surr_obj = self.surrogate(q_liq_fun, bsw, gor, z_c_hat, z_gl_hat, q_gl_max)
+        # surr_obj = self.surrogate(q_liq_fun, bsw, gor, z_c_hat, z_gl_hat, q_gl_max)
+        surr_obj = self.surrogate(bsw, gor, z_c_hat, z_gl_hat, q_gl_max)
         loss = - surr_obj
         loss = loss.mean()
 

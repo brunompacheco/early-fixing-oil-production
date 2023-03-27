@@ -36,7 +36,7 @@ if __name__ == '__main__':
     #     device=device,
     # ).run()
 
-    # net = ObjSurrogate(layers=[40, 20, 20, 20, 20])
+    # net = ObjSurrogate(layers=[25, 25])
     # # net = load_from_wandb(net, 'anfmnk7e', 'gef-fs')
     # ObjectiveSurrogateTrainer(
     #     net.double(),
@@ -48,14 +48,30 @@ if __name__ == '__main__':
     #     device=device,
     # ).run()
 
-    surrogate = load_from_wandb(ObjSurrogate(layers=[40, 20, 20, 20, 20]), 's8whau88', 'gef-fs').double()
-    EarlyFixingTrainer(
-        Fixer(layers=[100, 100, 100, 100, 100]).double(),
-        surrogate,
-        'ef_objs.pkl',
-        lr=.01,
-        epochs=100000,
-        wandb_project=wandb_project,
-        random_seed=seed,
-        device=device,
-    ).run()
+    for _ in range(8):
+        surrogate = load_from_wandb(ObjSurrogate(layers=[25, 25]), '7f8r3fp8', 'gef-fs').double()
+        fix = load_from_wandb(Fixer(layers=[10, 10]), 'fwci96c4', 'gef-fs').double()
+        EarlyFixingTrainer(
+            fix,
+            surrogate,
+            'ef_objs.pkl',
+            lr=.01,
+            epochs=500,
+            wandb_project=wandb_project,
+            random_seed=seed,
+            device=device,
+        ).run()
+
+    for _ in range(10):
+        surrogate = load_from_wandb(ObjSurrogate(layers=[25, 25]), '7f8r3fp8', 'gef-fs').double()
+        fix = load_from_wandb(Fixer(layers=[25, 25, 25]), 'pdyu8lj1', 'gef-fs').double()
+        EarlyFixingTrainer(
+            fix,
+            surrogate,
+            'ef_objs.pkl',
+            lr=.01,
+            epochs=1000,
+            wandb_project=wandb_project,
+            random_seed=seed,
+            device=device,
+        ).run()
