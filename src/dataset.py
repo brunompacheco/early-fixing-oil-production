@@ -70,6 +70,8 @@ class EarlyFixingDataset(Dataset):
     def __getitem__(self, idx):
         if idx < 0:
             i = len(self) + idx
+        elif idx >= self.__len__():
+            raise IndexError
         else:
             i = idx  # sample index
 
@@ -79,9 +81,9 @@ class EarlyFixingDataset(Dataset):
                 break
             else:
                 i -= n_q_gl_maxs
-        
+
         well_i = self.wells.index(well_name)
-        
+
         q_gl_max = self.q_gl_maxs[well_name][i]
 
         # q_liq_fun, bsw, gor = self.well_data[well_name]
@@ -134,6 +136,8 @@ class WellObjDataset(Dataset):
     def __getitem__(self, idx):
         if idx < 0:
             i = len(self) + idx
+        elif idx >= self.__len__():
+            raise IndexError
         else:
             i = idx  # sample index
 
