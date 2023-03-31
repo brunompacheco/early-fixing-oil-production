@@ -52,7 +52,7 @@ def get_accuracy_gaps(fixer, ds):
 
     failed_wells = [ds.wells[i] for i in failed_well_is]
 
-    gaps = list()
+    relative_gaps = list()
     for k in range(len(failed_wells)):
         with open('../data/raw/'+failed_wells[k]+'.pkl', 'rb') as f:
             failed_well = pickle.load(f)
@@ -66,11 +66,11 @@ def get_accuracy_gaps(fixer, ds):
         failed_well_model.optimize()
 
         if failed_well_model.status != 2:
-            gaps.append(-1)
+            relative_gaps.append(-1)
         else:
-            gaps.append(actual_obj[k] - failed_well_model.ObjVal)
+            relative_gaps.append((actual_obj[k] - failed_well_model.ObjVal) / actual_obj[k])
 
-    return acc, gaps
+    return acc, relative_gaps
 
 def get_mae_feas(surrogate, ds):
     y_hats = list()
