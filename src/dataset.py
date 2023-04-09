@@ -1,14 +1,10 @@
-from pathlib import Path
 import pickle
+from pathlib import Path
 from warnings import warn
-import dgl
-import numpy as np
+
 from torch.utils.data import Dataset
-import torch
 
-from dgl.data import DGLDataset
-
-from src.model import encode_fixing, get_C_GL, get_model
+from src.model import encode_fixing, get_C_GL
 
 
 class EarlyFixingDataset(Dataset):
@@ -51,17 +47,6 @@ class EarlyFixingDataset(Dataset):
                 self.wells.remove(well_name)
                 continue
 
-            C, GL = get_C_GL(well_name)
-
-            # q_liq_fun = -1 * np.ones((len(C), len(GL)))
-            # for i in range(len(C)):
-            #     for j in range(len(GL)):
-            #         try:
-            #             q_liq_fun[i,j] = well['curve'][C[i], GL[j]]
-            #         except KeyError:
-            #             q_liq_fun[i,j] = -1.
-
-            # self.well_data[well_name] = (q_liq_fun, well['bsw'], well['gor'])
             self.well_data[well_name] = (well['bsw'], well['gor'])
 
     def __len__(self):
@@ -86,11 +71,9 @@ class EarlyFixingDataset(Dataset):
 
         q_gl_max = self.q_gl_maxs[well_name][i]
 
-        # q_liq_fun, bsw, gor = self.well_data[well_name]
         bsw, gor = self.well_data[well_name]
         c_mbd, gl_mbd, obj = self.targets[well_name][q_gl_max]
 
-        # return (q_liq_fun, bsw, gor, q_gl_max), (c_mbd, gl_mbd, obj, well_i)
         return (bsw, gor, q_gl_max), (c_mbd, gl_mbd, obj, well_i)
 
 class WellObjDataset(Dataset):
@@ -111,21 +94,9 @@ class WellObjDataset(Dataset):
                 c_mbd, gl_mbd = encode_fixing((c1,c2), (gl1, gl2), well_name)
 
                 well_ef_objs['x'].append((c_mbd, gl_mbd, q_gl_max))
-                # well_ef_objs['x'].append((np.array([c1, c2]), np.array([gl1, gl2])))
                 well_ef_objs['y'].append(y)
             self.ef_objs.append(well_ef_objs)
 
-            C, GL = get_C_GL(well_name)
-
-            # q_liq_fun = -1 * np.ones((len(C), len(GL)))
-            # for i in range(len(C)):
-            #     for j in range(len(GL)):
-            #         try:
-            #             q_liq_fun[i,j] = well['curve'][C[i], GL[j]]
-            #         except KeyError:
-            #             q_liq_fun[i,j] = -1.
-
-            # self.well_data.append((q_liq_fun, well['bsw'], well['gor']))
             self.well_data.append((well['bsw'], well['gor']))
 
         self.wells = list(ef_objs.keys())
@@ -148,11 +119,9 @@ class WellObjDataset(Dataset):
             else:
                 i -= n_samples
 
-        # q_liq_fun, bsw, gor = self.well_data[n]
         bsw, gor = self.well_data[n]
 
         c_mbd, gl_mbd, q_gl_max = self.ef_objs[n]['x'][i]
         y = self.ef_objs[n]['y'][i]
 
-        # return (q_liq_fun, bsw, gor, c_mbd, gl_mbd, q_gl_max), y
         return (bsw, gor, c_mbd, gl_mbd, q_gl_max), y

@@ -1,9 +1,10 @@
 import pickle
+
 import numpy as np
 import torch
 from tqdm import tqdm
 
-from src.model import decode_fixing, get_model, fix_c_gl
+from src.model import decode_fixing, fix_c_gl, get_model
 
 
 def get_accuracy_gaps(fixer, ds):

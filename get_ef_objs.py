@@ -1,16 +1,16 @@
 import pickle
 from pathlib import Path
 from time import time
+
 import numpy as np
 from tqdm import tqdm
 
-from src.model import fix_c_gl, get_model, get_C_GL
+from src.model import fix_c_gl, get_C_GL, get_model
 
 
 if __name__ == '__main__':
     wells_fps = Path('data/raw').glob('*.pkl')
 
-    # Prepara estruturas de dados para armazenamento dos valores das curvas de produção e RGL de poço
     C, GL = get_C_GL(None)
 
     ef_objs = dict()
