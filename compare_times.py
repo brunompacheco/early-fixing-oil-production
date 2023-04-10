@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from src.model import decode_fixing, fix_c_gl, get_C_GL, get_model
+from src.model import decode_fixing, fix_c_gl, get_C_GL, get_model, warm_start_c_gl
 from src.net import Fixer
 from src.utils import load_from_wandb
 
@@ -53,8 +53,9 @@ if __name__ == '__main__':
                 c_mbd_hat, gl_mbd_hat = (y_hat > .5).numpy().astype(int)[0]
 
             cs_hat, gls_hat = decode_fixing(c_mbd_hat, gl_mbd_hat, well)
-            
+
             fixed_model = fix_c_gl(fixed_model, cs_hat, gls_hat)
+            # fixed_model = warm_start_c_gl(fixed_model, cs_hat, gls_hat)
             fixed_model.update()
 
             start = time()

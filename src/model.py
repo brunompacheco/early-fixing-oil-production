@@ -95,6 +95,18 @@ def get_model(wells: List[dict], avoid_infeasible=True, q_gl_max=300000, verbose
     return model
 
 def fix_c_gl(model, cs, gls):
+    def fix_heuristic(var):
+        var.ub = 0
+
+    return apply_heuristic_c_gl(model, cs, gls, fix_heuristic)
+
+def warm_start_c_gl(model, cs, gls):
+    def ws_heuristic(var):
+        var.Start = 0
+
+    return apply_heuristic_c_gl(model, cs, gls, ws_heuristic)
+
+def apply_heuristic_c_gl(model, cs, gls, heuristic = lambda x: x):
     assert len(cs) <= 2
     assert len(gls) <= 2
 
@@ -107,11 +119,11 @@ def fix_c_gl(model, cs, gls):
         if var.VarName.startswith('eta_n_c'):
             c = float(var.VarName.split(',')[-1].rstrip(']'))
             if c not in cs:
-                var.ub = 0.0
+                heuristic(var)
         elif var.VarName.startswith('eta_n_gl'):
             gl = float(var.VarName.split(',')[-1].rstrip(']'))
             if gl not in gls:
-                var.ub = 0.0
+                heuristic(var)
 
     model_.update()
 
